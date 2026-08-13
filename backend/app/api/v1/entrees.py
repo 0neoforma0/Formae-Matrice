@@ -7,13 +7,16 @@ from app.core.database import get_db
 from app.core.validation import valider_attributs
 from app.models.axe_classement import AxeClassement
 from app.models.entree import Entree
+from app.models.intervenant import Intervenant
 from app.models.jonctions import entree_axe, entree_intervenant, version_piece
 from app.models.phase import Phase
 from app.models.piece_justificative import PieceJustificative
 from app.models.projet import Projet
 from app.models.titulaire import Titulaire
 from app.models.version import Version
+from app.schemas.axe_classement import AxeClassementLecture
 from app.schemas.entree import EntreeCreation, EntreeLecture, VersionCreation, VersionLecture
+from app.schemas.intervenant import IntervenantLecture
 
 router = APIRouter(prefix="/entrees", tags=["entrees"])
 
@@ -219,3 +222,110 @@ def sensible_effective(entree_id: uuid.UUID, db: Session = Depends(get_db)) -> d
         "sensible_herite": axe_sensible,
         "sensible_effective": entree.sensible or axe_sensible,
     }
+
+
+@router.get("/{entree_id}/axes", response_model=list[AxeClassementLecture])
+def lister_axes_rattaches(entree_id: uuid.UUID, db: Session = Depends(get_db)) -> list[AxeClassement]:
+    entree = db.get(Entree, entree_id)
+    if entree is None:
+        raise HTTPException(404, "Entrée introuvable.")
+
+    axe_ids = [row.axe_id for row in db.execute(entree_axe.select().where(entree_axe.c.entree_id == entree_id))]
+    if not axe_ids:
+        return []
+    return db.query(AxeClassement).filter(AxeClassement.id.in_(axe_ids)).all()
+
+
+@router.post("/{entree_id}/axes/{axe_id}", response_model=list[AxeClassementLecture], status_code=201)
+def rattacher_axe(entree_id: uuid.UUID, axe_id: uuid.UUID, db: Session = Depends(get_db)) -> list[AxeClassement]:
+    """Rattache a posteriori un axe existant à une Entrée (Backlog Lot 3)."""
+    entree = db.get(Entree, entree_id)
+    if entree is None:
+        raise HTTPException(404, "Entrée introuvable.")
+
+    axe = db.get(AxeClassement, axe_id)
+    if axe is None:
+        raise HTTPException(404, "Axe de classement introuvable.")
+    if axe.projet_id != entree.projet_id:
+        raise HTTPException(422, "Cet axe appartient à un autre Projet que celui de l'Entrée.")
+
+    deja_rattache = db.execute(
+        entree_axe.select().where(entree_axe.c.entree_id == entree_id, entree_axe.c.axe_id == axe_id)
+    ).first()
+    if deja_rattache is None:
+        db.execute(entree_axe.insert().values(entree_id=entree_id, axe_id=axe_id))
+        db.commit()
+
+    return lister_axes_rattaches(entree_id, db)
+
+
+@router.delete("/{entree_id}/axes/{axe_id}", status_code=204)
+def detacher_axe(entree_id: uuid.UUID, axe_id: uuid.UUID, db: Session = Depends(get_db)) -> None:
+    entree = db.get(Entree, entree_id)
+    if entree is None:
+        raise HTTPException(404, "Entrée introuvable.")
+
+    resultat = db.execute(
+        entree_axe.delete().where(entree_axe.c.entree_id == entree_id, entree_axe.c.axe_id == axe_id)
+    )
+    if resultat.rowcount == 0:
+        raise HTTPException(404, "Cet axe n'est pas rattaché à cette Entrée.")
+    db.commit()
+
+
+@router.get("/{entree_id}/intervenants", response_model=list[IntervenantLecture])
+def lister_intervenants_rattaches(entree_id: uuid.UUID, db: Session = Depends(get_db)) -> list[Intervenant]:
+    entree = db.get(Entree, entree_id)
+    if entree is None:
+        raise HTTPException(404, "Entrée introuvable.")
+
+    intervenant_ids = [
+        row.intervenant_id
+        for row in db.execute(entree_intervenant.select().where(entree_intervenant.c.entree_id == entree_id))
+    ]
+    if not intervenant_ids:
+        return []
+    return db.query(Intervenant).filter(Intervenant.id.in_(intervenant_ids)).all()
+
+
+@router.post(
+    "/{entree_id}/intervenants/{intervenant_id}", response_model=list[IntervenantLecture], status_code=201
+)
+def rattacher_intervenant(
+    entree_id: uuid.UUID, intervenant_id: uuid.UUID, db: Session = Depends(get_db)
+) -> list[Intervenant]:
+    """Rattache a posteriori un intervenant existant à une Entrée (Backlog Lot 3)."""
+    entree = db.get(Entree, entree_id)
+    if entree is None:
+        raise HTTPException(404, "Entrée introuvable.")
+
+    intervenant = db.get(Intervenant, intervenant_id)
+    if intervenant is None:
+        raise HTTPException(404, "Intervenant introuvable.")
+
+    deja_rattache = db.execute(
+        entree_intervenant.select().where(
+            entree_intervenant.c.entree_id == entree_id, entree_intervenant.c.intervenant_id == intervenant_id
+        )
+    ).first()
+    if deja_rattache is None:
+        db.execute(entree_intervenant.insert().values(entree_id=entree_id, intervenant_id=intervenant_id))
+        db.commit()
+
+    return lister_intervenants_rattaches(entree_id, db)
+
+
+@router.delete("/{entree_id}/intervenants/{intervenant_id}", status_code=204)
+def detacher_intervenant(entree_id: uuid.UUID, intervenant_id: uuid.UUID, db: Session = Depends(get_db)) -> None:
+    entree = db.get(Entree, entree_id)
+    if entree is None:
+        raise HTTPException(404, "Entrée introuvable.")
+
+    resultat = db.execute(
+        entree_intervenant.delete().where(
+            entree_intervenant.c.entree_id == entree_id, entree_intervenant.c.intervenant_id == intervenant_id
+        )
+    )
+    if resultat.rowcount == 0:
+        raise HTTPException(404, "Cet intervenant n'est pas rattaché à cette Entrée.")
+    db.commit()
