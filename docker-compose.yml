@@ -1,0 +1,44 @@
+version: "3.9"
+
+# Matrice — environnement de développement local
+# Décision 11/08/2026 : Dev en local (Docker Compose) jusqu'au Lot 5.
+# Staging/Prod ne sont provisionnés sur Scaleway qu'au Lot 6 (test terrain réel).
+
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: matrice_db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: matrice
+      POSTGRES_PASSWORD: matrice_dev_local
+      POSTGRES_DB: matrice
+    ports:
+      - "5432:5432"
+    volumes:
+      - matrice_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U matrice"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+    container_name: matrice_backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql+psycopg://matrice:matrice_dev_local@db:5432/matrice
+      ENVIRONMENT: local
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      db:
+        condition: service_healthy
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+
+volumes:
+  matrice_db_data:
